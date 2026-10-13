@@ -1,0 +1,261 @@
+Resume Intelligence Platform (RIP)
+
+Technology Stack & System Workflow Documentation
+
+Major Web Technology Subject Project  |  Prepared by Sabarisastha V (24205022)  |  National Engineering College, Tuticorin
+
+Scope: this document covers the complete technology stack, architecture reasoning, AI model selection, and end-to-end system workflow. Database schema and design (PostgreSQL / MongoDB / Vector DB structure) is documented separately in "RIP Database Design Documentation."
+
+1. Design Constraint — Zero Cost, No Deployment
+
+This project is built entirely on free and self-hosted tools. No paid API, paid hosting tier, or paid database plan is used at any point. In addition, the project does not need to be deployed to a public server — it runs fully on local infrastructure (localhost + local Docker containers + a locally-run AI model). This removes an entire category of "free tier" problems (cold starts, rate limits, 90-day trial expiry, sleep-on-idle) since nothing depends on a third-party server staying up or staying within a quota.
+
+2. Complete Technology Stack
+
+2.1 Frontend
+
+Tool
+
+Purpose
+
+React.js
+
+UI library
+
+React Router
+
+Client-side routing
+
+Tailwind CSS
+
+Styling
+
+Axios
+
+HTTP client to backend API
+
+2.2 Backend
+
+Tool
+
+Purpose
+
+Node.js + Express.js
+
+REST API server
+
+JWT
+
+Authentication
+
+bcrypt
+
+Password hashing
+
+Multer
+
+File upload middleware (resume uploads)
+
+2.3 Databases (all self-hosted via Docker — no cloud tier)
+
+Database
+
+Role
+
+Runs as
+
+PostgreSQL
+
+Structured relational data (users, resumes, education, experience, etc.)
+
+Local Docker container
+
+MongoDB
+
+Variable-shape documents (AI reports, JD data, resume snapshots)
+
+Local Docker container
+
+Qdrant
+
+Vector similarity search (resume ↔ JD semantic matching)
+
+Local Docker container
+
+Running all three via Docker Compose means the entire data layer starts with a single command, is identical across any machine it's run on, and requires no cloud account or billing setup.
+
+2.4 AI / ML Layer (fully offline)
+
+Component
+
+Choice
+
+Why
+
+LLM runtime
+
+Ollama
+
+Proven locally in a prior project (VSS·RAG); simple local model serving with an HTTP API
+
+Chat/reasoning model
+
+Qwen2.5 7B Instruct
+
+Strongest structured-JSON / instruction-following reliability at 7-8B scale — matches the project's need for consistent ATS score breakdowns, not open-ended chat
+
+Embedding model
+
+nomic-embed-text (via Ollama)
+
+Keeps embeddings fully local/offline too — consistent with the zero-dependency goal, avoids mixing a cloud embedding API into an otherwise offline pipeline
+
+Fallback note: no external LLM fallback (e.g. Gemini/Groq) is used, by design — the project intentionally stays 100% offline-capable. If local model output quality becomes a blocker during development, this is the one place a cloud fallback could be reconsidered, but it is out of scope for the current plan.
+
+2.5 Resume Parsing & PDF Handling
+
+Tool
+
+Purpose
+
+pdf-parse
+
+Extract text from uploaded PDF resumes
+
+mammoth
+
+Extract text from uploaded .docx resumes
+
+pdf-lib / Puppeteer
+
+Generate the final exported resume PDF
+
+3. Why This Architecture (Recap of Key Reasoning)
+
+All three databases run locally via Docker — no cloud tier limits, no internet dependency for the data layer, identical behavior to a cloud deployment if one is ever needed later.
+
+Ollama chosen over cloud LLM APIs (Gemini/Groq) once deployment was ruled unnecessary — removes the last remaining internet dependency and matches proven prior experience (VSS·RAG).
+
+Qwen2.5 7B chosen specifically for structured-output reliability, since most of RIP's AI features (ATS breakdown, keyword extraction, project enhancement) require consistent JSON, not conversational quality.
+
+Embeddings kept on the same local Ollama runtime as the chat model rather than split across a cloud provider — one dependency to manage instead of two, and it preserves the fully-offline goal end to end.
+
+4. End-to-End System Workflow
+
+Updated version of the original workflow, mapped to the actual tools chosen:
+
+Step 1 — User registers/logs in (Express + JWT + bcrypt, user record in PostgreSQL).
+
+Step 2 — User uploads an existing resume or builds a new one (Multer handles upload; pdf-parse/mammoth extract text).
+
+Step 3 — Extracted resume data is structured and stored: structured fields → PostgreSQL, full document/version → MongoDB.
+
+Step 4 — Resume content is chunked (per project/experience entry) and embedded via Ollama's nomic-embed-text, stored in Qdrant with metadata.
+
+Step 5 — ATS Score is generated: resume text sent to the local Qwen2.5 model with a strict JSON-output prompt → score + breakdown saved to MongoDB (ats_reports) with a summary row in PostgreSQL (ats_reports_summary).
+
+Step 6 — User uploads a Job Description — parsed, keyword-extracted, and stored in MongoDB (job_descriptions); JD chunks embedded and stored in Qdrant.
+
+Step 7 — Resume Success Simulator queries Qdrant for semantic similarity between resume chunks and JD chunks, combines this with keyword/ATS signals, and asks the local model to produce the match score + rejection risks (simulation_reports in MongoDB).
+
+Step 8 — Project Impact Enhancer sends a project's base description + target role to the local model, which returns a role-tailored description (project_enhancements in MongoDB).
+
+Step 9 — User reviews AI suggestions and applies changes to their resume through the builder UI.
+
+Step 10 — Final resume is generated and exported to PDF (pdf-lib/Puppeteer), with the updated version saved back to MongoDB's version_history.
+
+5. Local Development Setup Overview
+
+High-level shape of how the project runs on a single machine, no deployment involved:
+
+docker-compose.yml
+
+  ├─ postgres        (port 5432)
+
+  ├─ mongodb         (port 27017)
+
+  └─ qdrant          (port 6333)
+
+ 
+
+Ollama (installed natively, not in Docker)
+
+  ├─ qwen2.5:7b-instruct   (chat / structured JSON generation)
+
+  └─ nomic-embed-text      (embeddings)
+
+ 
+
+Backend:  npm run dev        → http://localhost:5000
+
+Frontend: npm run dev        → http://localhost:5173
+
+One command (docker compose up) brings up all three databases; Ollama runs as a background service; frontend and backend run in separate terminals during development. No cloud account, billing setup, or deployment pipeline is required at any stage.
+
+6. Future Deployment Path (Not Needed Now — Reference Only)
+
+The project is built local-only by design, but the architecture was kept deployment-ready on purpose: every service is swapped via connection string / config, not by rewriting code. If deployment is ever needed — placement portfolio, live demo link, etc. — this is the migration path:
+
+6.1 What is a simple swap (config only)
+
+Local (current)
+
+Deployed equivalent
+
+Change required
+
+PostgreSQL (Docker)
+
+Supabase or Neon (free tier)
+
+Swap DATABASE_URL in .env
+
+MongoDB (Docker)
+
+MongoDB Atlas M0 (free tier)
+
+Swap MONGO_URI in .env
+
+Qdrant (Docker)
+
+Qdrant Cloud (free tier)
+
+Swap QDRANT_URL + API key in .env
+
+React frontend (localhost)
+
+Vercel or Netlify
+
+Connect repo, set build command — no code change
+
+Express backend (localhost)
+
+Render or Railway
+
+Connect repo, set env vars — no code change
+
+6.2 What actually needs a decision (not just a swap)
+
+The AI layer is the one exception. Ollama running Qwen2.5 7B needs real RAM/CPU to serve requests — free hosting tiers (Render/Railway free plans) do not have the resources to run a 7B local model. Two real options at that point:
+
+Switch the AI layer back to cloud APIs (Gemini and/or Groq, both free-tier) for the deployed version — same prompt contract already designed, just a different provider behind it.
+
+Keep Ollama, but run it on a small paid GPU/CPU cloud instance — only worth it if staying fully self-hosted matters more than staying free at that stage.
+
+Recommended default if this is ever needed: cloud APIs for the deployed version, Ollama for local development — the same "provider-agnostic" prompt contract designed for the Gemini/Groq fallback earlier makes this an easy switch, since the code was never written to assume Ollama specifically.
+
+6.3 Why this wasn't built as a design requirement now
+
+Adding deployment concerns (environment-based config switching, secrets management for multiple environments, CI/CD) now would add complexity with no payoff for a project that only needs to run for local development and a live viva/demo. This section exists so the reasoning and migration path are on record, not because deployment is planned for this project cycle.
+
+7. Key Decisions Log (Tech Stack)
+
+Chose to skip deployment entirely — the project only needs to run for local development and live demo/viva, so cloud hosting adds complexity with no real benefit at this stage.
+
+Moved all three databases from cloud free tiers to local Docker containers once deployment was ruled out — removes cold-start and rate-limit risk during a live demo.
+
+Switched the AI layer from cloud APIs (Gemini/Groq) to fully local Ollama once "no deployment needed" was confirmed — the last reason to depend on the internet went away.
+
+Picked Qwen2.5 7B Instruct over Llama 3.1 8B and Mistral 7B specifically for its stronger structured/JSON output reliability, which matters more here than general chat quality.
+
+Kept embeddings on the same Ollama runtime as the chat model (nomic-embed-text) instead of a cloud embedding API, to preserve a genuinely dependency-free, fully offline system end to end.

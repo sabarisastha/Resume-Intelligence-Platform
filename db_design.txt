@@ -1,0 +1,760 @@
+Resume Intelligence Platform (RIP)
+
+Database Design Documentation
+
+Major Web Technology Subject Project  |  Prepared by Sabarisastha V (24205022)  |  National Engineering College, Tuticorin
+
+Status: PostgreSQL schema finalized. MongoDB collections and Vector DB integration are the next design phase (not yet finalized).
+
+1. Overview
+
+Resume Intelligence Platform (RIP) is a full-stack MERN application that provides explainable ATS scoring, role-specific project description optimization, resume-to-job-description match simulation, and resume building/conversion. This document records the database architecture decisions made for the project, the reasoning behind each choice, and the finalized PostgreSQL schema, so the design can be referred back to at any point during development or while explaining it in a viva/review.
+
+2. Why a Polyglot Persistence Strategy
+
+The platform's data does not have one consistent shape. Some of it is highly structured and relational (a user owns many resumes, a resume has many education entries). Some of it is variable-shape and document-like (a parsed job description, a full resume snapshot, an ATS explanation report). And some of it needs semantic similarity search rather than exact matching (comparing resume content to a job description). Using a single database for all three would force compromises, so the project uses three purpose-fit databases:
+
+2.1 PostgreSQL — structured, relational data
+
+Used for anything with a fixed schema and real relationships that benefit from foreign key integrity: Users, Resumes (core record), Education, Experience, Projects, Certifications, Skills, and lightweight report summaries. This is the system's source of truth.
+
+2.2 MongoDB — variable-shape document data
+
+Used for data whose structure varies per record and would require constant schema migrations in a relational model: full resume content snapshots, uploaded job descriptions and their extracted keywords, and the detailed ATS/Simulation report bodies (the actual explanation text, breakdowns, and recommendations). Postgres stores only a reference ID into these documents (mongo_doc_id, mongo_report_id) — the relationship exists at the application level, not as a database-enforced foreign key, since Postgres cannot enforce integrity into a separate database system. This is a design risk worth remembering: the backend code is responsible for keeping these references consistent.
+
+
+
+
+
+2.3 Vector Database — semantic matching
+
+Used for embedding-based similarity search between resume content and job description content, so matching goes beyond naive keyword overlap (e.g. matching "built REST APIs" against a JD asking for "backend service development"). This layer is planned but not yet finalized — collection/index design is a pending task (see Section 6).
+
+3. PostgreSQL Schema — Entity Reference
+
+Design conventions applied consistently across the schema:
+
+UUID primary keys (not auto-increment integers) on most tables — keeps IDs collision-free and consistent when cross-referencing with MongoDB ObjectIds from application code.
+
+A skills master table plus a resume_skills junction table (many-to-many) rather than a plain text array — allows standardizing skill names ("React" vs "ReactJS" vs "React.js") for future JD keyword matching, and enables queries like "all users who know React."
+
+tech_stack on projects deliberately kept as a Postgres array, not normalized into a junction table — it's descriptive metadata for a single project, not something queried/joined across at scale. Not every one-to-many-looking field needs full normalization.
+
+mongo_doc_id / mongo_report_id fields are plain VARCHAR, not foreign keys — Postgres cannot enforce referential integrity into MongoDB. This link is an application-level contract only.
+
+3.1 users
+
+Stores core account and identity data. Independent entity — a strong entity in ER terms.
+
+Column
+
+Type
+
+Notes
+
+id
+
+UUID (PK)
+
+Default gen_random_uuid()
+
+email
+
+VARCHAR(255)
+
+UNIQUE, NOT NULL
+
+password_hash
+
+TEXT
+
+NOT NULL, bcrypt hash
+
+full_name
+
+VARCHAR(150)
+
+NOT NULL
+
+phone
+
+VARCHAR(20)
+
+
+
+linkedin_url
+
+TEXT
+
+
+
+github_url
+
+TEXT
+
+
+
+portfolio_url
+
+TEXT
+
+
+
+created_at
+
+TIMESTAMPTZ
+
+Default now()
+
+updated_at
+
+TIMESTAMPTZ
+
+Default now()
+
+
+
+
+
+
+
+
+
+3.2 resumes
+
+One user can own multiple resumes (e.g. a Backend-tailored one, a Frontend-tailored one). Strong entity; the hub that most other tables depend on.
+
+Column
+
+Type
+
+Notes
+
+id
+
+UUID (PK)
+
+Default gen_random_uuid()
+
+user_id
+
+UUID (FK)
+
+References users(id) ON DELETE CASCADE
+
+title
+
+VARCHAR(150)
+
+e.g. "Backend - Juspay Application"
+
+target_role
+
+VARCHAR(100)
+
+Frontend / Backend / Full Stack
+
+template_id
+
+VARCHAR(50)
+
+
+
+mongo_doc_id
+
+VARCHAR(64)
+
+Points to full resume JSON in MongoDB
+
+is_active
+
+BOOLEAN
+
+Default true
+
+created_at
+
+TIMESTAMPTZ
+
+Default now()
+
+updated_at
+
+TIMESTAMPTZ
+
+Default now()
+
+3.3 education (weak entity)
+
+Cannot exist independently of a resume — an education row's identity only makes sense as "resume X's Nth education entry." Modeled as a weak entity in the ER diagram (double rectangle).
+
+Column
+
+Type
+
+Notes
+
+id
+
+UUID (PK)
+
+Default gen_random_uuid()
+
+resume_id
+
+UUID (FK)
+
+References resumes(id) ON DELETE CASCADE
+
+institution
+
+VARCHAR(200)
+
+NOT NULL
+
+degree
+
+VARCHAR(150)
+
+
+
+field_of_study
+
+VARCHAR(150)
+
+
+
+start_date / end_date
+
+DATE
+
+
+
+grade
+
+VARCHAR(20)
+
+
+
+3.4 experience (weak entity)
+
+Column
+
+Type
+
+Notes
+
+id
+
+UUID (PK)
+
+Default gen_random_uuid()
+
+resume_id
+
+UUID (FK)
+
+References resumes(id) ON DELETE CASCADE
+
+company
+
+VARCHAR(200)
+
+NOT NULL
+
+role
+
+VARCHAR(150)
+
+
+
+start_date / end_date
+
+DATE
+
+
+
+is_current
+
+BOOLEAN
+
+Default false
+
+description
+
+TEXT
+
+Base description, before role-tailoring
+
+
+
+
+
+
+
+
+
+3.5 projects (weak entity)
+
+Column
+
+Type
+
+Notes
+
+id
+
+UUID (PK)
+
+Default gen_random_uuid()
+
+resume_id
+
+UUID (FK)
+
+References resumes(id) ON DELETE CASCADE
+
+title
+
+VARCHAR(200)
+
+NOT NULL
+
+description
+
+TEXT
+
+Base description before role-tailoring
+
+tech_stack
+
+TEXT[]
+
+Postgres array — intentionally not normalized
+
+github_link / live_link
+
+TEXT
+
+
+
+
+
+3.6 skills (strong entity)
+
+Master list of standardized skill names. Exists independently of any resume — this is why it stays a regular entity, while the link to a resume (resume_skills) is a relationship, not an entity.
+
+Column
+
+Type
+
+Notes
+
+id
+
+SERIAL (PK)
+
+
+
+name
+
+VARCHAR(100)
+
+UNIQUE, NOT NULL
+
+category
+
+VARCHAR(50)
+
+Language / Framework / Tool / Soft Skill
+
+
+
+3.7 resume_skills (junction / M:N relationship)
+
+Many-to-many bridge between resumes and skills. In the Chen ER diagram this is modeled as the HAS SKILL relationship diamond, with proficiency attached as a relationship attribute.
+
+Column
+
+Type
+
+Notes
+
+resume_id
+
+UUID (FK)
+
+Composite PK with skill_id
+
+skill_id
+
+INT (FK)
+
+Composite PK with resume_id
+
+proficiency
+
+VARCHAR(20)
+
+Optional — Beginner/Intermediate/Advanced
+
+3.8 certifications (weak entity)
+
+Column
+
+Type
+
+Notes
+
+id
+
+UUID (PK)
+
+Default gen_random_uuid()
+
+resume_id
+
+UUID (FK)
+
+References resumes(id) ON DELETE CASCADE
+
+name
+
+VARCHAR(200)
+
+NOT NULL
+
+issuer
+
+VARCHAR(150)
+
+
+
+issue_date
+
+DATE
+
+
+
+
+
+
+
+
+
+3.9 ats_reports_summary (weak entity)
+
+Lightweight summary kept in Postgres for fast dashboard queries (e.g. "show ATS score history for this user"). The full explanation — reasons, breakdown, recommendations — lives in MongoDB; only the 
+
+score and a pointer to that document sit here.
+
+Column
+
+Type
+
+Notes
+
+id
+
+UUID (PK)
+
+Default gen_random_uuid()
+
+resume_id
+
+UUID (FK)
+
+References resumes(id) ON DELETE CASCADE
+
+jd_mongo_id
+
+VARCHAR(64)
+
+Reference to the matched Job Description doc
+
+ats_score
+
+INT
+
+
+
+match_score
+
+INT
+
+
+
+mongo_report_id
+
+VARCHAR(64)
+
+NOT NULL — full report body in MongoDB
+
+created_at
+
+TIMESTAMPTZ
+
+Default now()
+
+
+
+4. Full CREATE TABLE Statements
+
+Reference SQL — copy-ready for setting up the database.
+
+CREATE TABLE users (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    email VARCHAR(255) UNIQUE NOT NULL,
+
+    password_hash TEXT NOT NULL,
+
+    full_name VARCHAR(150) NOT NULL,
+
+    phone VARCHAR(20),
+
+    linkedin_url TEXT,
+
+    github_url TEXT,
+
+    portfolio_url TEXT,
+
+    created_at TIMESTAMPTZ DEFAULT now(),
+
+    updated_at TIMESTAMPTZ DEFAULT now()
+
+);
+
+ 
+
+CREATE TABLE resumes (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+
+    title VARCHAR(150) NOT NULL,
+
+    target_role VARCHAR(100),
+
+    template_id VARCHAR(50),
+
+    mongo_doc_id VARCHAR(64),
+
+    is_active BOOLEAN DEFAULT true,
+
+    created_at TIMESTAMPTZ DEFAULT now(),
+
+    updated_at TIMESTAMPTZ DEFAULT now()
+
+);
+
+ 
+
+CREATE TABLE education (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    resume_id UUID NOT NULL REFERENCES resumes(id) ON DELETE CASCADE,
+
+    institution VARCHAR(200) NOT NULL,
+
+    degree VARCHAR(150),
+
+    field_of_study VARCHAR(150),
+
+    start_date DATE,
+
+    end_date DATE,
+
+    grade VARCHAR(20)
+
+);
+
+ 
+
+CREATE TABLE experience (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    resume_id UUID NOT NULL REFERENCES resumes(id) ON DELETE CASCADE,
+
+    company VARCHAR(200) NOT NULL,
+
+    role VARCHAR(150),
+
+    start_date DATE,
+
+    end_date DATE,
+
+    is_current BOOLEAN DEFAULT false,
+
+    description TEXT
+
+);
+
+ 
+
+CREATE TABLE projects (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    resume_id UUID NOT NULL REFERENCES resumes(id) ON DELETE CASCADE,
+
+    title VARCHAR(200) NOT NULL,
+
+    description TEXT,
+
+    tech_stack TEXT[],
+
+    github_link TEXT,
+
+    live_link TEXT
+
+);
+
+ 
+
+CREATE TABLE skills (
+
+    id SERIAL PRIMARY KEY,
+
+    name VARCHAR(100) UNIQUE NOT NULL,
+
+    category VARCHAR(50)
+
+);
+
+ 
+
+CREATE TABLE resume_skills (
+
+    resume_id UUID REFERENCES resumes(id) ON DELETE CASCADE,
+
+    skill_id INT REFERENCES skills(id),
+
+    proficiency VARCHAR(20),
+
+    PRIMARY KEY (resume_id, skill_id)
+
+);
+
+ 
+
+CREATE TABLE certifications (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    resume_id UUID NOT NULL REFERENCES resumes(id) ON DELETE CASCADE,
+
+    name VARCHAR(200) NOT NULL,
+
+    issuer VARCHAR(150),
+
+    issue_date DATE
+
+);
+
+ 
+
+CREATE TABLE ats_reports_summary (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    resume_id UUID NOT NULL REFERENCES resumes(id) ON DELETE CASCADE,
+
+    jd_mongo_id VARCHAR(64),
+
+    ats_score INT,
+
+    match_score INT,
+
+    mongo_report_id VARCHAR(64) NOT NULL,
+
+    created_at TIMESTAMPTZ DEFAULT now()
+
+);
+
+
+
+5. ER Diagram Notation Reference (Chen Notation)
+
+The ER diagram was drawn using classic Chen notation, not crow's-foot table notation. Legend used:
+
+Column
+
+Type
+
+Notes
+
+Rectangle
+
+Entities
+
+Strong entities: users, resumes, skills
+
+Double Rectangle
+
+Weak entities
+
+education, experience, projects, certifications, ats_reports_summary
+
+Ellipse
+
+Attributes
+
+Connected to their entity or relationship by a line
+
+Diamond
+
+Relationships
+
+OWNS, HAS, HAS SKILL
+
+Line
+
+Connector
+
+Attribute-to-entity and entity-to-relationship links
+
+
+Cardinalities used: USERS (1) — OWNS — (N) RESUMES; RESUMES (1) — HAS — (N) each of EDUCATION / EXPERIENCE / PROJECTS / CERTIFICATIONS / ATS_REPORTS_SUMMARY; RESUMES (N) — HAS SKILL — (N) SKILLS, with proficiency as a relationship attribute on that diamond.
+
+Note: strict Chen notation also uses a double diamond for the identifying relationship connecting a weak entity to its owner. This was left as a single diamond to match the reference legend provided during design — revisit if a stricter notation is required for submission.
+
+
+
+6. Pending Design Work — Next Steps
+
+This document currently covers the PostgreSQL layer only. The following are not yet finalized:
+
+MongoDB collections — Resumes (full document referenced by mongo_doc_id), JobDescriptions (with extracted keywords), ATSReports, ProjectEnhancements, SimulationReports. Field-level schema for each is pending.
+
+Vector DB — choice of vector database/library, embedding model, chunking strategy (whole resume vs per-section vs per-project), and index design for JD-to-resume semantic matching.
+
+Consistency strategy — how the backend guarantees mongo_doc_id / mongo_report_id references stay valid when a resume or report is created, updated, or deleted (since Postgres cannot enforce this automatically).
+
+
+
+
+
+
+
+
+
+7. Key Design Decisions Log
+
+Kept for reference — the reasoning, not just the outcome, so it can be explained in a review or viva.
+
+Polyglot persistence (Postgres + MongoDB + Vector DB) chosen because the project's data has three distinct shapes: relational, variable-document, and semantic-similarity.
+
+UUIDs used instead of auto-increment integers to stay consistent with MongoDB ObjectIds referenced from the same records.
+
+skills kept as a separate master table + junction table (not a plain array) to support standardized skill names and future analytics/matching queries.
+
+tech_stack kept as a Postgres array on projects — deliberately not normalized, since it is descriptive metadata rather than a field queried across projects at scale.
+
+mongo_doc_id / mongo_report_id are unenforced VARCHAR references — Postgres cannot enforce cross-database integrity, so this is an application-level responsibility.
+
+education, experience, projects, certifications, ats_reports_summary modeled as weak entities since none of them have independent meaning without a parent resume.

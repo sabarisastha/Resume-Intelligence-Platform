@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: rip-postgres
+    environment:
+      POSTGRES_USER: rip_user
+      POSTGRES_PASSWORD: rip_password
+      POSTGRES_DB: rip_db
+    ports:
+      - '5433:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Mount the init script — Postgres runs .sql files in this directory
+      # automatically on FIRST container creation (not on restart).
+      # To re-run: delete the volume with `docker compose down -v` first.
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U rip_user -d rip_db']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:6.0
+    container_name: rip-mongodb
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongodb_data:/data/db
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rip-qdrant
+    ports:
+      - '6333:6333'
+      - '6334:6334'
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+volumes:
+  postgres_data:
+  mongodb_data:
+  qdrant_data:

@@ -1,0 +1,28 @@
+{
+  "name": "rip-backend",
+  "version": "1.0.0",
+  "description": "Resume Intelligence Platform - Backend API",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js",
+    "test:e2e": "node --test --test-isolation=none e2e.test.js"
+  },
+  "dependencies": {
+    "@qdrant/js-client-rest": "^1.12.0",
+    "axios": "^1.20.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "form-data": "^4.0.6",
+    "jsonwebtoken": "^9.0.2",
+    "mammoth": "^1.8.0",
+    "mongoose": "^8.8.0",
+    "multer": "^1.4.5-lts.1",
+    "pdf-parse": "^1.1.1",
+    "pg": "^8.13.0",
+    "uuid": "^10.0.0"
+  }
+}
